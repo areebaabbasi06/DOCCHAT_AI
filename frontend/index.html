@@ -1,0 +1,407 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>DocChat AI</title>
+
+    <!-- Icons -->
+    <link
+        rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    >
+
+    <link rel="stylesheet" href="style.css">
+
+</head>
+
+<body>
+
+<div class="app">
+
+    <!-- HEADER -->
+    <header class="header">
+
+        <div class="brand">
+
+            <div class="brand-icon">
+                <i class="fa-solid fa-file-lines"></i>
+            </div>
+
+            <div>
+                <h1>DocChat AI</h1>
+                <p>Chat with your documents</p>
+            </div>
+
+        </div>
+
+        <div class="header-right">
+
+            <div class="connection-status">
+                <span class="status-dot"></span>
+                <span>Connected</span>
+            </div>
+
+            <button class="icon-button">
+                <i class="fa-solid fa-gear"></i>
+            </button>
+
+        </div>
+
+    </header>
+
+
+    <!-- MAIN -->
+    <main class="main-container">
+
+
+        <!-- LEFT: DOCUMENT -->
+        <section class="document-panel">
+
+            <div class="panel-heading">
+
+                <div class="heading-icon">
+                    <i class="fa-regular fa-file-pdf"></i>
+                </div>
+
+                <div>
+                    <h2>Document</h2>
+                    <p>Upload a PDF to get started</p>
+                </div>
+
+            </div>
+
+
+            <!-- UPLOAD -->
+            <div class="upload-area" id="uploadArea">
+
+                <div class="upload-icon">
+                    <i class="fa-solid fa-cloud-arrow-up"></i>
+                </div>
+
+                <h3>Upload your PDF</h3>
+
+                <p>Drag &amp; drop your document here</p>
+
+                <span class="or-text">or</span>
+
+                <input
+                    type="file"
+                    id="pdfInput"
+                    accept=".pdf,application/pdf"
+                    hidden
+                >
+
+                <button
+                    class="upload-button"
+                    onclick="document.getElementById('pdfInput').click()"
+                >
+                    <i class="fa-solid fa-upload"></i>
+                    Choose PDF
+                </button>
+
+                <small>
+                    PDF files only &bull; Maximum 5 MB
+                </small>
+
+            </div>
+
+
+            <!-- SELECTED FILE -->
+            <div
+                class="selected-document"
+                id="documentInfo"
+            >
+
+                <div class="pdf-icon">
+                    <i class="fa-regular fa-file-pdf"></i>
+                </div>
+
+                <div class="file-information">
+
+                    <strong id="fileName">
+                        No document selected
+                    </strong>
+
+                    <span id="fileSize">
+                        —
+                    </span>
+
+                </div>
+
+                <button
+                    class="remove-file"
+                    onclick="removeFile()"
+                    title="Remove PDF"
+                >
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+
+            </div>
+
+
+            <!-- PROCESSING -->
+            <div class="processing-section">
+
+                <div class="section-title">
+
+                    <i class="fa-solid fa-spinner"></i>
+
+                    <span>
+                        Processing
+                    </span>
+
+                </div>
+
+                <div class="progress-container">
+
+                    <div
+                        class="progress-bar"
+                        id="progressBar"
+                    ></div>
+
+                </div>
+
+                <p id="processingStatus">
+                    Waiting for document...
+                </p>
+
+            </div>
+
+
+            <!-- PDF VIEWER -->
+            <div
+                class="pdf-viewer"
+                id="pdfViewerContainer"
+                style="display: none;"
+            >
+
+                <div class="section-title">
+
+                    <i class="fa-regular fa-file-pdf"></i>
+
+                    <span>
+                        PDF Preview
+                    </span>
+
+                </div>
+
+                <iframe
+                    id="pdfViewer"
+                    title="PDF Preview"
+                    width="100%"
+                    height="600"
+                    style="
+                        border: none;
+                        border-radius: 10px;
+                        background: white;
+                    "
+                ></iframe>
+
+            </div>
+
+
+            <!-- DOCUMENT INFO -->
+            <div class="document-info-box">
+
+                <div class="info-item">
+
+                    <div class="info-icon">
+                        <i class="fa-regular fa-file"></i>
+                    </div>
+
+                    <div>
+
+                        <span>
+                            Pages
+                        </span>
+
+                        <strong id="pageCount">
+                            0
+                        </strong>
+
+                    </div>
+
+                </div>
+
+
+                <div class="info-item">
+
+                    <div class="info-icon">
+                        <i class="fa-solid fa-layer-group"></i>
+                    </div>
+
+                    <div>
+
+                        <span>
+                            Chunks
+                        </span>
+
+                        <strong id="chunkCount">
+                            0
+                        </strong>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- RIGHT: CHAT -->
+        <section class="chat-panel">
+
+
+            <!-- CHAT HEADER -->
+            <div class="chat-header">
+
+                <div class="chat-title">
+
+                    <div class="chat-icon">
+                        <i class="fa-regular fa-comments"></i>
+                    </div>
+
+                    <div>
+
+                        <h2>
+                            Chat
+                        </h2>
+
+                        <p>
+                            Ask questions about your document
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <button
+                    class="new-chat-button"
+                    onclick="newChat()"
+                >
+                    <i class="fa-solid fa-plus"></i>
+                    New Chat
+                </button>
+
+            </div>
+
+
+            <!-- MESSAGES -->
+            <div
+                class="chat-messages"
+                id="chatMessages"
+            >
+
+                <!-- AI MESSAGE -->
+                <div class="message ai-message">
+
+                    <div class="message-avatar ai-avatar">
+
+                        <i class="fa-solid fa-robot"></i>
+
+                    </div>
+
+                    <div class="message-body">
+
+                        <div class="message-header">
+
+                            <span class="message-name">
+                                DocChat AI
+                            </span>
+
+                            <span class="message-time">
+                                Now
+                            </span>
+
+                        </div>
+
+                        <div class="message-text">
+
+                            Hello! 👋
+
+                            <br><br>
+
+                            Upload a PDF and I'll help you
+                            understand its contents.
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <!-- SOURCES -->
+            <div
+                class="sources"
+                id="sources"
+            ></div>
+
+
+            <!-- INPUT -->
+            <div class="chat-input-container">
+
+                <div class="input-wrapper">
+
+                    <textarea
+                        id="questionInput"
+                        placeholder="Ask a question about your PDF..."
+                        rows="1"
+                    ></textarea>
+
+                    <button
+                        class="send-button"
+                        onclick="sendMessage()"
+                        title="Send message"
+                    >
+                        <i class="fa-solid fa-paper-plane"></i>
+                    </button>
+
+                </div>
+
+
+                <div class="input-footer">
+
+                    <span>
+
+                        <i class="fa-solid fa-lock"></i>
+
+                        Your document stays private
+
+                    </span>
+
+                    <span>
+
+                        Enter to send &bull; Shift + Enter
+                        for new line
+
+                    </span>
+
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+</div>
+
+
+<!-- JAVASCRIPT -->
+<script src="script.js"></script>
+
+</body>
+
+</html>
+
