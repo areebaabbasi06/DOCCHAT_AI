@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 import os
 import shutil
 import sys
+import threading
 
 
 # ==========================================
@@ -27,15 +28,6 @@ if PROJECT_ROOT not in sys.path:
 
 from application_backend.file_validator import validate_file
 from application_backend.session_manager import SessionManager
-
-
-# ==========================================
-# RAG IMPORTS
-# ==========================================
-
-from Rag.pdf_processor import PDFProcessor
-from Rag.qdrant_db import QdrantDB
-from Rag.rag_pipeline import RAGPipeline
 
 
 # ==========================================
@@ -66,15 +58,66 @@ app.add_middleware(
 
 session_manager = SessionManager()
 
-pdf_processor = PDFProcessor()
 
-qdrant_db = QdrantDB()
+# ==========================================
+# LAZY SERVICES
+# ==========================================
 
-# RAG pipeline is initialized ONCE.
-# It reuses the same embedding model,
-# Gemini client and Tavily client.
+pdf_processor = None
+qdrant_db = None
+rag = None
 
-rag = RAGPipeline()
+rag_lock = threading.Lock()
+
+
+def get_services():
+    """
+    Load PDF processor and Qdrant only when needed.
+    """
+
+    global pdf_processor
+    global qdrant_db
+
+    if pdf_processor is None:
+        from Rag.pdf_processor import PDFProcessor
+        pdf_processor = PDFProcessor()
+
+    if qdrant_db is None:
+        from Rag.qdrant_db import QdrantDB
+        qdrant_db = QdrantDB()
+
+    return pdf_processor, qdrant_db
+
+
+def get_rag():
+    """
+    Load RAG pipeline only when PDF/chat actually needs it.
+
+    This prevents the embedding model from loading
+    during Railway container startup.
+    """
+
+    global rag
+
+    if rag is None:
+
+        with rag_lock:
+
+            if rag is None:
+
+                print(
+                    "\n🧠 Loading RAG Pipeline..."
+                )
+
+                from Rag.rag_pipeline import RAGPipeline
+
+                rag = RAGPipeline()
+
+                print(
+                    "✅ RAG Pipeline loaded successfully."
+                )
+
+    return rag
 
 
 # ==========================================
@@ -94,13 +137,14 @@ os.makedirs(
 
 
 # ==========================================
-# HOME
+# HEALTH CHECK / HOME
 # ==========================================
 
 @app.get("/")
 def home():
 
     return {
+        "status": "ok",
         "message": "DocChat AI Backend Running"
     }
 
@@ -167,6 +211,19 @@ async def upload_document(
 
 
         # ==================================
+        # LOAD SERVICES
+        # ==================================
+
+        print(
+            "🔧 Loading PDF/Qdrant services..."
+        )
+
+        pdf_processor_service, qdrant_service = (
+            get_services()
+        )
+
+
+        # ==================================
         # EXTRACT TEXT + CREATE CHUNKS
         # ==================================
 
@@ -174,7 +231,7 @@ async def upload_document(
             "📖 Extracting text from PDF..."
         )
 
-        chunks = pdf_processor.process_pdf(
+        chunks = pdf_processor_service.process_pdf(
             file_path,
             filename=file.filename
         )
@@ -219,6 +276,17 @@ async def upload_document(
 
 
         # ==================================
+        # LOAD RAG ONLY NOW
+        # ==================================
+
+        print(
+            "🧠 Loading embedding model..."
+        )
+
+        rag_service = get_rag()
+
+
+        # ==================================
         # CREATE EMBEDDINGS
         # ==================================
 
@@ -241,7 +309,7 @@ async def upload_document(
 
 
             embedding = (
-                rag.embedder.embed_query(
+                rag_service.embedder.embed_query(
                     content
                 )
             )
@@ -294,7 +362,7 @@ async def upload_document(
 
 
         stored_chunks = (
-            qdrant_db.upsert_chunks(
+            qdrant_service.upsert_chunks(
                 chunks,
                 embeddings
             )
@@ -517,41 +585,17 @@ async def chat(
     # ======================================
     # PDF MODE
     # ======================================
-    #
-    # Frontend can send:
-    #
-    # use_pdf: true
-    #
-    # or:
-    #
-    # use_pdf: false
-    #
-    # PDF is NOT mandatory.
-    # ======================================
 
     use_pdf = request.get(
         "use_pdf",
         False
     )
 
-
-    # Make sure it is actually boolean.
-
     use_pdf = bool(use_pdf)
 
 
     # ======================================
     # GET IMAGE
-    # ======================================
-    #
-    # Frontend can send an image as:
-    #
-    # image: "data:image/png;base64,..."
-    #
-    # Image is optional.
-    #
-    # Existing PDF functionality is NOT
-    # affected.
     # ======================================
 
     image_data = request.get(
@@ -583,18 +627,9 @@ async def chat(
         image_data = image_data.strip()
 
 
-        # Empty image means no image.
-
         if not image_data:
-
             image_data = None
 
-
-        # Prevent extremely large requests.
-        #
-        # This is only a safety limit for the
-        # base64 request. It does NOT remove
-        # the existing PDF 5 MB limit.
 
         if image_data and len(image_data) > 10_000_000:
 
@@ -638,20 +673,6 @@ async def chat(
     question = question.strip()
 
 
-    # ======================================
-    # QUESTION + IMAGE VALIDATION
-    # ======================================
-    #
-    # A user can send:
-    #
-    # 1. Question only
-    # 2. Question + PDF
-    # 3. Question + image
-    # 4. Question + PDF + image
-    #
-    # Existing question requirement remains.
-    # ======================================
-
     if not question:
 
         return {
@@ -680,24 +701,20 @@ async def chat(
             "\n==================================="
         )
 
-
         print(
             "💬 Question:",
             question
         )
-
 
         print(
             "📄 PDF Retrieval:",
             use_pdf
         )
 
-
         print(
             "🖼️ Image:",
             "Yes" if image_data else "No"
         )
-
 
         print(
             "==================================="
@@ -739,7 +756,6 @@ async def chat(
                 "➡️ Image will be sent to Gemini."
             )
 
-
         else:
 
             print(
@@ -748,29 +764,22 @@ async def chat(
 
 
         # ==================================
-        # RAG PIPELINE
-        # ==================================
-        #
-        # IMPORTANT:
-        #
-        # image_data is passed to the RAG
-        # pipeline.
-        #
-        # The RAG pipeline will handle:
-        #
-        # PDF retrieval
-        # Web search
-        # Image
-        # Gemini
-        #
+        # LOAD RAG ONLY WHEN CHAT IS USED
         # ==================================
 
         print(
-            "\n🤖 Sending request to RAG pipeline..."
+            "\n🤖 Loading RAG pipeline..."
+        )
+
+        rag_service = get_rag()
+
+
+        print(
+            "🤖 Sending request to RAG pipeline..."
         )
 
 
-        answer = rag.ask(
+        answer = rag_service.ask(
             question,
             use_pdf=use_pdf,
             image_data=image_data
@@ -812,7 +821,6 @@ async def chat(
         print(
             "\n❌ Chat error:"
         )
-
 
         print(
             str(e)
