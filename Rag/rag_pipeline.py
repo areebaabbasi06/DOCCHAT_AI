@@ -1,5 +1,6 @@
 import sys
 import os
+from typing import Optional
 
 # ==========================================
 # PROJECT ROOT
@@ -80,11 +81,12 @@ class RAGPipeline:
     def ask(
         self,
         question: str,
-        use_pdf: bool = True
+        use_pdf: bool = True,
+        image_data: Optional[str] = None
     ):
 
         """
-        Three modes are supported:
+        Supported modes:
 
         1. PDF + Internet
            use_pdf=True
@@ -98,10 +100,25 @@ class RAGPipeline:
            → Search Internet
            → Gemini answers from web context
 
-        3. General chat
+        3. Image + Internet
+           image_data provided
+           → Gemini analyzes image
+           → Tavily searches web
+           → Gemini combines image + web information
+
+        4. PDF + Image + Internet
+           use_pdf=True
+           image_data provided
+           → Search PDF
+           → Analyze image
+           → Search Internet
+           → Gemini combines all relevant information
+
+        5. General chat
            use_pdf=False
-           → If web has no useful result,
-             Gemini can answer normally.
+           no image
+           → Search Internet
+           → If no useful web result, Gemini can answer normally.
         """
 
         # ==================================
@@ -114,9 +131,14 @@ class RAGPipeline:
 
         question = question.strip()
 
+
         print("\n===================================")
         print("Question:", question)
         print("PDF Mode:", use_pdf)
+        print(
+            "Image Provided:",
+            bool(image_data)
+        )
         print("===================================")
 
 
@@ -130,7 +152,9 @@ class RAGPipeline:
 
             try:
 
-                print("\n🔍 Creating query embedding...")
+                print(
+                    "\n🔍 Creating query embedding..."
+                )
 
                 query_embedding = (
                     self.embedder.embed_query(
@@ -138,11 +162,12 @@ class RAGPipeline:
                     )
                 )
 
-                print("🔎 Searching Qdrant...")
+                print(
+                    "🔎 Searching Qdrant..."
+                )
 
-                # Reduced from 5 to 3
-                # This improves speed and keeps
-                # the prompt smaller.
+                # Keep top 3 results
+                # for faster response.
 
                 results = self.retriever.search(
                     query_embedding=query_embedding,
@@ -160,20 +185,21 @@ class RAGPipeline:
                             ""
                         )
 
-                        if text and text.strip():
+                        if (
+                            text
+                            and text.strip()
+                        ):
 
                             pdf_parts.append(
                                 text.strip()
                             )
 
-                    # Keep only useful amount
-                    # of PDF context.
-
                     pdf_context = "\n\n".join(
                         pdf_parts
                     )
 
-                    # Limit context size
+                    # Limit PDF context
+
                     if len(pdf_context) > 12000:
 
                         pdf_context = (
@@ -200,10 +226,12 @@ class RAGPipeline:
                     "\n⚠️ PDF retrieval error:"
                 )
 
-                print(str(e))
+                print(
+                    str(e)
+                )
 
                 # PDF error should NOT stop
-                # internet chat.
+                # internet/image chat.
 
                 pdf_context = ""
 
@@ -219,6 +247,27 @@ class RAGPipeline:
 
 
         # ==========================================
+        # IMAGE
+        # ==========================================
+
+        if image_data:
+
+            print(
+                "\n🖼️ Image provided."
+            )
+
+            print(
+                "➡️ Gemini will analyze the image."
+            )
+
+        else:
+
+            print(
+                "\n🖼️ No image provided."
+            )
+
+
+        # ==========================================
         # WEB SEARCH
         # ==========================================
 
@@ -226,10 +275,11 @@ class RAGPipeline:
 
         try:
 
-            print("\n🌐 Searching the web...")
+            print(
+                "\n🌐 Searching the web..."
+            )
 
-            # Reduced from 5 to 3 results
-            # to improve response speed.
+            # Keep 3 results for faster response.
 
             web_results = self.web_search.search(
                 question,
@@ -257,8 +307,7 @@ class RAGPipeline:
                         ""
                     )
 
-                    # Limit each web result
-                    # so Gemini gets less text.
+                    # Limit each result
 
                     if len(content) > 3000:
 
@@ -305,7 +354,9 @@ class RAGPipeline:
                 "\n⚠️ Web search error:"
             )
 
-            print(str(e))
+            print(
+                str(e)
+            )
 
             web_context = ""
 
@@ -356,6 +407,25 @@ class RAGPipeline:
 
 
         # ------------------------------------------
+        # IMAGE CONTEXT NOTE
+        # ------------------------------------------
+
+        if image_data:
+
+            combined_context += (
+
+                "==============================\n"
+                "USER IMAGE\n"
+                "==============================\n\n"
+
+                "An image has been provided by the user. "
+                "The image itself will be sent directly "
+                "to Gemini for visual analysis.\n\n"
+
+            )
+
+
+        # ------------------------------------------
         # NO EXTERNAL CONTEXT
         # ------------------------------------------
 
@@ -363,11 +433,12 @@ class RAGPipeline:
 
             combined_context = (
 
-                "No relevant PDF or web context "
-                "was available. You may answer "
-                "using your general knowledge, "
-                "but do not pretend that the "
-                "answer came from a PDF or web source."
+                "No relevant PDF, web, or other "
+                "external context was available. "
+                "You may answer using your general "
+                "knowledge when appropriate, but "
+                "do not pretend that the answer came "
+                "from a PDF or web source."
             )
 
 
@@ -384,7 +455,8 @@ class RAGPipeline:
             result = (
                 self.gemini.generate_answer(
                     question,
-                    combined_context
+                    combined_context,
+                    image_data=image_data
                 )
             )
 
@@ -394,7 +466,9 @@ class RAGPipeline:
                 "\n❌ Gemini error:"
             )
 
-            print(str(e))
+            print(
+                str(e)
+            )
 
             return (
                 "Sorry, I couldn't generate "

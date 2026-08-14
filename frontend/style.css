@@ -1,4 +1,3 @@
-
 * {
     margin: 0;
     padding: 0;
@@ -509,7 +508,7 @@ body {
 }
 
 
-/* ================= INPUT ================= */
+/* ================= CHAT INPUT ================= */
 
 .chat-input-container {
     background: white;
@@ -517,19 +516,130 @@ body {
     padding: 15px 25px 10px;
 }
 
+
+/* ================= IMAGE PREVIEW ================= */
+
+.image-preview-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background: #f8faff;
+    border: 1px solid #e0e7ff;
+    border-radius: 10px;
+    width: fit-content;
+    max-width: 100%;
+}
+
+.image-preview-wrapper {
+    position: relative;
+    width: 58px;
+    height: 58px;
+    flex-shrink: 0;
+}
+
+.image-preview-wrapper img {
+    width: 58px;
+    height: 58px;
+    object-fit: cover;
+    border-radius: 8px;
+    display: block;
+    border: 1px solid #dbe3f0;
+}
+
+.remove-image-button {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    width: 21px;
+    height: 21px;
+    border: 2px solid white;
+    border-radius: 50%;
+    background: #ef4444;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0;
+}
+
+.remove-image-button:hover {
+    background: #dc2626;
+}
+
+.image-preview-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding-right: 4px;
+}
+
+.image-preview-info i {
+    color: #4f46e5;
+    font-size: 13px;
+}
+
+.image-preview-info span {
+    color: #4b5563;
+    font-size: 11px;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+
+/* ================= INPUT WRAPPER ================= */
+
 .input-wrapper {
     display: flex;
     align-items: flex-end;
-    gap: 10px;
+    gap: 8px;
     border: 1px solid #d1d5db;
     border-radius: 11px;
-    padding: 8px 8px 8px 13px;
+    padding: 8px 8px 8px 9px;
     background: white;
 }
 
 .input-wrapper:focus-within {
     border-color: #6366f1;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.08);
 }
+
+
+/* ================= IMAGE BUTTON ================= */
+
+.image-button {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    border: none;
+    border-radius: 8px;
+    background: #f3f4ff;
+    color: #4f46e5;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    transition: 0.2s;
+}
+
+.image-button:hover {
+    background: #e7e9ff;
+    color: #4338ca;
+}
+
+.image-button:active {
+    transform: scale(0.95);
+}
+
+
+/* ================= TEXTAREA ================= */
 
 .input-wrapper textarea {
     border: none;
@@ -541,21 +651,32 @@ body {
     min-height: 32px;
     max-height: 100px;
     padding-top: 7px;
+    line-height: 1.4;
 }
+
+
+/* ================= SEND BUTTON ================= */
 
 .send-button {
     width: 36px;
     height: 36px;
+    min-width: 36px;
     border: none;
     border-radius: 8px;
     background: #4f46e5;
     color: white;
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .send-button:hover {
     background: #4338ca;
 }
+
+
+/* ================= INPUT FOOTER ================= */
 
 .input-footer {
     display: flex;
@@ -610,6 +731,7 @@ body {
     .pdf-viewer iframe {
         height: 550px;
     }
+
 }
 
 
@@ -651,5 +773,18 @@ body {
         height: 500px;
         min-height: 400px;
     }
-}
 
+    .image-preview-container {
+        max-width: 100%;
+    }
+
+    .image-preview-info span {
+        max-width: 130px;
+    }
+
+    .image-button {
+        width: 32px;
+        min-width: 32px;
+    }
+
+}

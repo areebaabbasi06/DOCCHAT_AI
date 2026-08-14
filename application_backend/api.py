@@ -71,8 +71,9 @@ pdf_processor = PDFProcessor()
 qdrant_db = QdrantDB()
 
 # RAG pipeline is initialized ONCE.
-# It will reuse the same embedding model,
+# It reuses the same embedding model,
 # Gemini client and Tavily client.
+
 rag = RAGPipeline()
 
 
@@ -159,6 +160,7 @@ async def upload_document(
                 "chunks": 0
             }
 
+
         print(
             "✅ PDF validation successful"
         )
@@ -206,6 +208,7 @@ async def upload_document(
             )
         )
 
+
         print(
             f"📄 Pages processed: {pages}"
         )
@@ -243,13 +246,12 @@ async def upload_document(
                 )
             )
 
+
             embeddings.append(
                 embedding
             )
 
 
-            # Less terminal output = slightly cleaner/faster
-            # for large PDFs.
             if (
                 index == 0
                 or
@@ -289,6 +291,7 @@ async def upload_document(
         print(
             "📦 Storing chunks in Qdrant..."
         )
+
 
         stored_chunks = (
             qdrant_db.upsert_chunks(
@@ -336,6 +339,7 @@ async def upload_document(
             str(e)
         )
 
+
         return {
 
             "status": "error",
@@ -361,12 +365,14 @@ def get_pdf(filename: str):
         filename
     )
 
+
     if not os.path.exists(file_path):
 
         return {
             "status": "error",
             "message": "PDF not found."
         }
+
 
     return FileResponse(
         file_path,
@@ -384,6 +390,7 @@ def create_session():
     session_id = (
         session_manager.create_session()
     )
+
 
     return {
 
@@ -404,6 +411,7 @@ def get_history():
     sessions = (
         session_manager.get_all_sessions()
     )
+
 
     return {
 
@@ -428,6 +436,7 @@ def get_old_chat(
             session_id
         )
     )
+
 
     return {
 
@@ -456,6 +465,7 @@ def delete_chat(
         )
     )
 
+
     if not deleted:
 
         return {
@@ -465,6 +475,7 @@ def delete_chat(
             "message":
                 "Session not found."
         }
+
 
     return {
 
@@ -525,7 +536,91 @@ async def chat(
 
 
     # Make sure it is actually boolean.
+
     use_pdf = bool(use_pdf)
+
+
+    # ======================================
+    # GET IMAGE
+    # ======================================
+    #
+    # Frontend can send an image as:
+    #
+    # image: "data:image/png;base64,..."
+    #
+    # Image is optional.
+    #
+    # Existing PDF functionality is NOT
+    # affected.
+    # ======================================
+
+    image_data = request.get(
+        "image",
+        None
+    )
+
+
+    # ======================================
+    # VALIDATE IMAGE
+    # ======================================
+
+    if image_data is not None:
+
+        if not isinstance(
+            image_data,
+            str
+        ):
+
+            return {
+
+                "status": "error",
+
+                "message":
+                    "Invalid image data."
+            }
+
+
+        image_data = image_data.strip()
+
+
+        # Empty image means no image.
+
+        if not image_data:
+
+            image_data = None
+
+
+        # Prevent extremely large requests.
+        #
+        # This is only a safety limit for the
+        # base64 request. It does NOT remove
+        # the existing PDF 5 MB limit.
+
+        if image_data and len(image_data) > 10_000_000:
+
+            return {
+
+                "status": "error",
+
+                "message":
+                    "Image is too large. "
+                    "Please choose a smaller image."
+            }
+
+
+        if image_data:
+
+            if not image_data.startswith(
+                "data:image/"
+            ):
+
+                return {
+
+                    "status": "error",
+
+                    "message":
+                        "Invalid image format."
+                }
 
 
     # ======================================
@@ -539,8 +634,23 @@ async def chat(
 
         question = str(question)
 
+
     question = question.strip()
 
+
+    # ======================================
+    # QUESTION + IMAGE VALIDATION
+    # ======================================
+    #
+    # A user can send:
+    #
+    # 1. Question only
+    # 2. Question + PDF
+    # 3. Question + image
+    # 4. Question + PDF + image
+    #
+    # Existing question requirement remains.
+    # ======================================
 
     if not question:
 
@@ -570,15 +680,24 @@ async def chat(
             "\n==================================="
         )
 
+
         print(
             "💬 Question:",
             question
         )
 
+
         print(
             "📄 PDF Retrieval:",
             use_pdf
         )
+
+
+        print(
+            "🖼️ Image:",
+            "Yes" if image_data else "No"
+        )
+
 
         print(
             "==================================="
@@ -586,29 +705,75 @@ async def chat(
 
 
         # ==================================
-        # FAST CHAT PATH
+        # PDF STATUS
+        # ==================================
+
+        if use_pdf:
+
+            print(
+                "📄 PDF retrieval enabled."
+            )
+
+        else:
+
+            print(
+                "📄 PDF not required."
+            )
+
+            print(
+                "➡️ Skipping Qdrant/PDF retrieval."
+            )
+
+
+        # ==================================
+        # IMAGE STATUS
+        # ==================================
+
+        if image_data:
+
+            print(
+                "🖼️ Image received."
+            )
+
+            print(
+                "➡️ Image will be sent to Gemini."
+            )
+
+
+        else:
+
+            print(
+                "🖼️ No image attached."
+            )
+
+
+        # ==================================
+        # RAG PIPELINE
         # ==================================
         #
         # IMPORTANT:
         #
-        # use_pdf=False
+        # image_data is passed to the RAG
+        # pipeline.
         #
-        # → Skip Qdrant retrieval
-        # → Skip query embedding
-        # → Tavily still works
-        # → Gemini still works
+        # The RAG pipeline will handle:
         #
-        # use_pdf=True
+        # PDF retrieval
+        # Web search
+        # Image
+        # Gemini
         #
-        # → Qdrant retrieval works
-        # → PDF context works
-        # → Tavily still works
-        # → Gemini combines information
         # ==================================
+
+        print(
+            "\n🤖 Sending request to RAG pipeline..."
+        )
+
 
         answer = rag.ask(
             question,
-            use_pdf=use_pdf
+            use_pdf=use_pdf,
+            image_data=image_data
         )
 
 
@@ -648,9 +813,11 @@ async def chat(
             "\n❌ Chat error:"
         )
 
+
         print(
             str(e)
         )
+
 
         return {
 

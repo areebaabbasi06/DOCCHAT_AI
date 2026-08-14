@@ -1,8 +1,12 @@
 import os
-from typing import Dict
+import base64
+import mimetypes
+from typing import Dict, Optional
 
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
@@ -22,7 +26,7 @@ class GeminiLLM:
             api_key=api_key
         )
 
-        self.model = "gemini-3.5-flash"
+        self.model = "gemini-3.1-flash-lite"
 
 
     # ==========================================
@@ -59,6 +63,34 @@ ANSWER LANGUAGE
    used by the user.
 
 7. Do not unnecessarily translate the answer into another language.
+
+
+==================================================
+IMAGE UNDERSTANDING
+==================================================
+
+The user may optionally provide an image along with the question.
+
+1. Carefully analyze the provided image when an image is available.
+
+2. Use visible information from the image to answer the user's question.
+
+3. If the user asks what is shown in the image, describe the relevant
+   content clearly.
+
+4. If the image contains text, read and use that text when possible.
+
+5. If the image contains a chart, diagram, table, screenshot,
+   document, map, or code, use the visible information to answer.
+
+6. Do not invent information that cannot reasonably be determined
+   from the image.
+
+7. If the image is unclear or insufficient, honestly say that the
+   image does not provide enough information.
+
+8. If both an image and PDF/web context are provided, combine them
+   when they are relevant to the question.
 
 
 ==================================================
@@ -149,7 +181,7 @@ Use clean Markdown formatting.
 EXAMPLE OF CORRECT FORMATTING
 ==================================================
 
-A good answer should look like this:
+A good answer should look like:
 
 ## Why RAG is Important
 
@@ -214,23 +246,25 @@ INFORMATION AND ACCURACY RULES
 4. When both PDF and web information are relevant,
    combine them naturally.
 
-5. Do NOT invent facts that are not supported by the
-   available context.
+5. Use the provided image when it is relevant to the question.
 
-6. For questions requiring current or latest information,
+6. Do NOT invent facts that are not supported by the
+   available context or image.
+
+7. For questions requiring current or latest information,
    prefer the provided web search information.
 
-7. If there is no relevant PDF information, do not pretend
+8. If there is no relevant PDF information, do not pretend
    that the PDF contains the answer.
 
-8. If there is no relevant web or PDF information,
+9. If there is no relevant web or PDF information,
    use general knowledge only when appropriate.
 
-9. If the available information is insufficient,
-   honestly tell the user that the available information
-   is insufficient.
+10. If the available information is insufficient,
+    honestly tell the user that the available information
+    is insufficient.
 
-10. Do not claim that information came from the PDF
+11. Do not claim that information came from the PDF
     unless it is actually present in the provided context.
 
 
@@ -264,6 +298,7 @@ Before producing the final answer, internally check:
 - Are headings used only where useful?
 - Are important terms formatted with **bold** when appropriate?
 - Is the answer based on the available context?
+- Did you use the image when relevant?
 - Did you avoid inventing unsupported information?
 - Did you avoid unnecessary repetition?
 
@@ -274,16 +309,80 @@ Do not explain these formatting instructions to the user.
 
 
     # ==========================================
+    # IMAGE DATA CONVERTER
+    # ==========================================
+
+    def _image_to_part(
+        self,
+        image_data: Optional[str]
+    ):
+
+        if not image_data:
+            return None
+
+        try:
+
+            # Expected format:
+            # data:image/png;base64,AAAA...
+
+            if image_data.startswith("data:image/"):
+
+                header, encoded = image_data.split(
+                    ",",
+                    1
+                )
+
+                mime_type = header.split(
+                    ";",
+                    1
+                )[0].replace(
+                    "data:",
+                    ""
+                )
+
+            else:
+
+                encoded = image_data
+
+                mime_type = "image/jpeg"
+
+
+            image_bytes = base64.b64decode(
+                encoded
+            )
+
+
+            return types.Part.from_bytes(
+                data=image_bytes,
+                mime_type=mime_type
+            )
+
+
+        except Exception as e:
+
+            print(
+                "\n⚠️ Image processing error:"
+            )
+
+            print(
+                str(e)
+            )
+
+            return None
+
+
+    # ==========================================
     # GENERATE ANSWER
     # ==========================================
 
     def generate_answer(
         self,
         question: str,
-        context: str
+        context: str,
+        image_data: Optional[str] = None
     ) -> Dict:
 
-        if not context.strip():
+        if not context.strip() and not image_data:
 
             return {
                 "answer": (
@@ -293,6 +392,10 @@ Do not explain these formatting instructions to the user.
             }
 
 
+        # ======================================
+        # BUILD TEXT PROMPT
+        # ======================================
+
         prompt = self.build_prompt(
             question,
             context
@@ -301,11 +404,74 @@ Do not explain these formatting instructions to the user.
 
         try:
 
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=prompt
+            # ==================================
+            # CONTENTS
+            # ==================================
+
+            contents = []
+
+
+            # Text prompt
+
+            contents.append(
+                prompt
             )
 
+
+            # ==================================
+            # IMAGE
+            # ==================================
+
+            if image_data:
+
+                print(
+                    "🖼️ Adding image to Gemini request..."
+                )
+
+                image_part = (
+                    self._image_to_part(
+                        image_data
+                    )
+                )
+
+
+                if image_part:
+
+                    contents.append(
+                        image_part
+                    )
+
+                    print(
+                        "✅ Image added successfully."
+                    )
+
+                else:
+
+                    print(
+                        "⚠️ Image could not be processed."
+                    )
+
+
+            # ==================================
+            # GEMINI REQUEST
+            # ==================================
+
+            print(
+                "🤖 Sending request to Gemini..."
+            )
+
+
+            response = (
+                self.client.models.generate_content(
+                    model=self.model,
+                    contents=contents
+                )
+            )
+
+
+            # ==================================
+            # EMPTY RESPONSE
+            # ==================================
 
             if not response.text:
 
@@ -317,15 +483,34 @@ Do not explain these formatting instructions to the user.
                 }
 
 
+            # ==================================
+            # SUCCESS
+            # ==================================
+
             return {
-                "answer": response.text.strip(),
-                "sources": []
+                "answer":
+                    response.text.strip(),
+
+                "sources":
+                    []
             }
 
 
         except Exception as e:
 
+            print(
+                "\n❌ Gemini error:"
+            )
+
+            print(
+                str(e)
+            )
+
+
             return {
-                "answer": f"An error occurred: {str(e)}",
-                "sources": []
+                "answer":
+                    f"An error occurred: {str(e)}",
+
+                "sources":
+                    []
             }
