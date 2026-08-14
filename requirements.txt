@@ -11,3 +11,4 @@ numpy
 requests
 pdfplumber
 langchain-text-splitters
+fastembed
