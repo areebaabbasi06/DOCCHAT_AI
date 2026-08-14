@@ -1,4 +1,4 @@
-const API_URL = "https://docchat-ai-production.up.railway.app";
+
 let currentFile = null;
 let currentImage = null;
 let sessionId = crypto.randomUUID();
@@ -515,12 +515,11 @@ async function processDocument(file) {
             pdfViewerContainer.style.display =
                 "none";
         }
-
-
-        alert(
-            "PDF process nahi ho saki.\n\n" +
-            error.message
-        );
+alert(
+    "Could not process the PDF.\n\n" +
+    error.message
+);
+    
 
 
     } finally {
