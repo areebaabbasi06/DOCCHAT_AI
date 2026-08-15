@@ -1,7 +1,6 @@
 """
 Embedding Generator for DocChat AI
-- Uses fastembed (lightweight, no heavy torch needed)
-- Multilingual support
+Railway-friendly FastEmbed embedding model
 """
 
 from fastembed import TextEmbedding
@@ -12,21 +11,20 @@ class EmbeddingGenerator:
 
     def __init__(
         self,
-        model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        model_name: str = "BAAI/bge-small-en-v1.5"
     ):
-        """
-        Load the embedding model using fastembed.
-        """
+        print("Loading embedding model...")
 
-        print("Loading embedding model... (first time it will download)")
+        self.model = TextEmbedding(
+            model_name=model_name
+        )
 
-        self.model = TextEmbedding(model_name=model_name)
-
-        # Qdrant collection dimension
+        # BAAI/bge-small-en-v1.5 = 384 dimensions
         self.dimension = 384
 
         print(
-            f"Model loaded successfully! Embedding dimension: {self.dimension}"
+            f"Model loaded successfully! "
+            f"Embedding dimension: {self.dimension}"
         )
 
 
@@ -34,14 +32,13 @@ class EmbeddingGenerator:
         self,
         texts: List[str]
     ) -> List[List[float]]:
-        """
-        Generate embeddings for multiple text chunks.
-        """
 
         if not texts:
             return []
 
-        embeddings = list(self.model.embed(texts))
+        embeddings = list(
+            self.model.embed(texts)
+        )
 
         return [
             embedding.tolist()
@@ -53,42 +50,35 @@ class EmbeddingGenerator:
         self,
         chunks: List[Dict]
     ) -> List[Dict]:
-        """
-        Add embeddings to document chunks.
-        """
 
         texts = [
             chunk["content"]
             for chunk in chunks
         ]
 
-        embeddings = self.generate_embeddings(texts)
+        embeddings = self.generate_embeddings(
+            texts
+        )
 
-
-        for chunk, embedding in zip(chunks, embeddings):
-
+        for chunk, embedding in zip(
+            chunks,
+            embeddings
+        ):
             chunk["embedding"] = embedding
 
-
         return chunks
-
 
 
     def embed_query(
         self,
         query: str
     ) -> List[float]:
-        """
-        Generate embedding for user query.
-        """
 
         embedding = list(
             self.model.embed([query])
         )[0]
 
-
         return embedding.tolist()
-
 
 
 if __name__ == "__main__":
@@ -99,7 +89,15 @@ if __name__ == "__main__":
         "Retrieval Augmented Generation is used for document question answering."
     ]
 
-    result = embedder.generate_embeddings(test_text)
+    result = embedder.generate_embeddings(
+        test_text
+    )
 
-    print("\n✅ Embedding Generated Successfully")
-    print("Vector size:", len(result[0]))
+    print(
+        "\n✅ Embedding Generated Successfully"
+    )
+
+    print(
+        "Vector size:",
+        len(result[0])
+    )
