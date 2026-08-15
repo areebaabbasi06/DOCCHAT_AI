@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 import os
-import shutil
 import sys
 import threading
 
@@ -68,6 +67,7 @@ qdrant_db = None
 rag = None
 
 rag_lock = threading.Lock()
+services_lock = threading.Lock()
 
 
 def get_services():
@@ -78,23 +78,42 @@ def get_services():
     global pdf_processor
     global qdrant_db
 
-    if pdf_processor is None:
-        from Rag.pdf_processor import PDFProcessor
-        pdf_processor = PDFProcessor()
+    with services_lock:
 
-    if qdrant_db is None:
-        from Rag.qdrant_db import QdrantDB
-        qdrant_db = QdrantDB()
+        if pdf_processor is None:
+
+            print(
+                "📖 Initializing PDF processor..."
+            )
+
+            from Rag.pdf_processor import PDFProcessor
+
+            pdf_processor = PDFProcessor()
+
+            print(
+                "✅ PDF processor ready."
+            )
+
+        if qdrant_db is None:
+
+            print(
+                "🔌 Initializing Qdrant..."
+            )
+
+            from Rag.qdrant_db import QdrantDB
+
+            qdrant_db = QdrantDB()
+
+            print(
+                "✅ Qdrant service ready."
+            )
 
     return pdf_processor, qdrant_db
 
 
 def get_rag():
     """
-    Load RAG pipeline only when PDF/chat actually needs it.
-
-    This prevents the embedding model from loading
-    during Railway container startup.
+    Load RAG pipeline only when actually required.
     """
 
     global rag
@@ -158,29 +177,89 @@ async def upload_document(
     file: UploadFile = File(...)
 ):
 
-    file_path = os.path.join(
-        UPLOAD_FOLDER,
+    # ======================================
+    # BASIC VALIDATION
+    # ======================================
+
+    if not file.filename:
+
+        return {
+            "status": "error",
+            "message": "No PDF file was selected.",
+            "pages": 0,
+            "chunks": 0
+        }
+
+    filename = os.path.basename(
         file.filename
     )
 
+    if not filename.lower().endswith(".pdf"):
+
+        return {
+            "status": "error",
+            "message": "Please upload a PDF file.",
+            "pages": 0,
+            "chunks": 0
+        }
+
+
+    file_path = os.path.join(
+        UPLOAD_FOLDER,
+        filename
+    )
+
+
     try:
 
+        print(
+            "\n==================================="
+        )
+
+        print(
+            "📥 PDF UPLOAD STARTED"
+        )
+
+        print(
+            "📄 Filename:",
+            filename
+        )
+
+        print(
+            "==================================="
+        )
+
+
         # ==================================
-        # SAVE PDF
+        # SAVE PDF IN SMALL STREAMS
         # ==================================
+
+        print(
+            "💾 Saving PDF..."
+        )
 
         with open(
             file_path,
             "wb"
         ) as buffer:
 
-            shutil.copyfileobj(
-                file.file,
-                buffer
-            )
+            while True:
+
+                data = await file.read(
+                    1024 * 1024
+                )
+
+                if not data:
+                    break
+
+                buffer.write(
+                    data
+                )
+
+        await file.close()
 
         print(
-            f"\n📄 PDF uploaded: {file.filename}"
+            "✅ PDF saved successfully."
         )
 
 
@@ -188,14 +267,26 @@ async def upload_document(
         # VALIDATE PDF
         # ==================================
 
+        print(
+            "🔍 Validating PDF..."
+        )
+
         valid, message = validate_file(
             file_path
         )
 
         if not valid:
 
+            print(
+                "❌ PDF validation failed:",
+                message
+            )
+
             if os.path.exists(file_path):
-                os.remove(file_path)
+
+                os.remove(
+                    file_path
+                )
 
             return {
                 "status": "error",
@@ -206,16 +297,16 @@ async def upload_document(
 
 
         print(
-            "✅ PDF validation successful"
+            "✅ PDF validation successful."
         )
 
 
         # ==================================
-        # LOAD SERVICES
+        # LOAD PDF PROCESSOR
         # ==================================
 
         print(
-            "🔧 Loading PDF/Qdrant services..."
+            "🔧 Loading PDF processor..."
         )
 
         pdf_processor_service, qdrant_service = (
@@ -224,16 +315,23 @@ async def upload_document(
 
 
         # ==================================
-        # EXTRACT TEXT + CREATE CHUNKS
+        # EXTRACT PDF TEXT + CHUNKS
         # ==================================
 
         print(
-            "📖 Extracting text from PDF..."
+            "📖 Extracting PDF text..."
         )
 
-        chunks = pdf_processor_service.process_pdf(
-            file_path,
-            filename=file.filename
+        chunks = (
+            pdf_processor_service.process_pdf(
+                file_path,
+                filename=filename
+            )
+        )
+
+
+        print(
+            "✅ PDF text extraction completed."
         )
 
 
@@ -242,6 +340,10 @@ async def upload_document(
         # ==================================
 
         if not chunks:
+
+            print(
+                "❌ No chunks were created."
+            )
 
             return {
                 "status": "error",
@@ -255,14 +357,25 @@ async def upload_document(
 
 
         # ==================================
-        # CALCULATE PAGE COUNT
+        # PAGE COUNT
         # ==================================
 
         pages = len(
             set(
-                chunk["metadata"]["page"]
+                chunk.get(
+                    "metadata",
+                    {}
+                ).get(
+                    "page",
+                    0
+                )
                 for chunk in chunks
             )
+        )
+
+
+        total_chunks = len(
+            chunks
         )
 
 
@@ -271,12 +384,12 @@ async def upload_document(
         )
 
         print(
-            f"✂️ Chunks created: {len(chunks)}"
+            f"✂️ Chunks created: {total_chunks}"
         )
 
 
         # ==================================
-        # LOAD RAG ONLY NOW
+        # LOAD RAG / EMBEDDING MODEL
         # ==================================
 
         print(
@@ -285,99 +398,162 @@ async def upload_document(
 
         rag_service = get_rag()
 
-
-        # ==================================
-        # CREATE EMBEDDINGS
-        # ==================================
-
         print(
-            "🧠 Creating embeddings..."
+            "✅ Embedding model ready."
         )
 
-        embeddings = []
+
+        # ==================================
+        # EMBEDDING + QDRANT BATCHING
+        # ==================================
+
+        BATCH_SIZE = 8
+
+        total_stored = 0
 
 
-        for index, chunk in enumerate(chunks):
+        print(
+            f"🧠 Processing embeddings "
+            f"in batches of {BATCH_SIZE}..."
+        )
 
-            content = chunk.get(
-                "content",
-                ""
+
+        for start in range(
+            0,
+            total_chunks,
+            BATCH_SIZE
+        ):
+
+            end = min(
+                start + BATCH_SIZE,
+                total_chunks
             )
 
-            if not content.strip():
-                continue
+
+            batch_chunks = chunks[
+                start:end
+            ]
 
 
-            embedding = (
-                rag_service.embedder.embed_query(
-                    content
+            print(
+                f"\n🧠 Embedding chunks "
+                f"{start + 1}-{end}/"
+                f"{total_chunks}"
+            )
+
+
+            batch_embeddings = []
+
+
+            # ==================================
+            # CREATE BATCH EMBEDDINGS
+            # ==================================
+
+            for chunk in batch_chunks:
+
+                content = chunk.get(
+                    "content",
+                    ""
+                )
+
+
+                if not content.strip():
+
+                    raise ValueError(
+                        "A PDF chunk contains "
+                        "empty text."
+                    )
+
+
+                embedding = (
+                    rag_service
+                    .embedder
+                    .embed_query(
+                        content
+                    )
+                )
+
+
+                batch_embeddings.append(
+                    embedding
+                )
+
+
+            print(
+                f"✅ Created "
+                f"{len(batch_embeddings)} "
+                f"embeddings."
+            )
+
+
+            # ==================================
+            # STORE BATCH IN QDRANT
+            # ==================================
+
+            print(
+                "📦 Sending batch to Qdrant..."
+            )
+
+
+            stored = (
+                qdrant_service.upsert_chunks(
+                    batch_chunks,
+                    batch_embeddings
                 )
             )
 
 
-            embeddings.append(
-                embedding
-            )
+            if stored is None:
 
-
-            if (
-                index == 0
-                or
-                (index + 1) % 10 == 0
-                or
-                index == len(chunks) - 1
-            ):
-
-                print(
-                    f"   Embedding "
-                    f"{index + 1}/{len(chunks)}"
+                stored = len(
+                    batch_chunks
                 )
 
 
-        # ==================================
-        # VERIFY EMBEDDINGS
-        # ==================================
-
-        if len(embeddings) != len(chunks):
-
-            raise ValueError(
-                "Number of embeddings does not "
-                "match number of chunks."
+            total_stored += int(
+                stored
             )
 
 
-        print(
-            f"✅ Embeddings created: "
-            f"{len(embeddings)}"
-        )
-
-
-        # ==================================
-        # STORE IN QDRANT
-        # ==================================
-
-        print(
-            "📦 Storing chunks in Qdrant..."
-        )
-
-
-        stored_chunks = (
-            qdrant_service.upsert_chunks(
-                chunks,
-                embeddings
+            print(
+                f"✅ Batch stored. "
+                f"Total stored: "
+                f"{total_stored}/{total_chunks}"
             )
-        )
 
+
+            # ==================================
+            # RELEASE BATCH MEMORY
+            # ==================================
+
+            del batch_embeddings
+            del batch_chunks
+
+
+        # ==================================
+        # FINAL SUCCESS
+        # ==================================
 
         print(
-            f"✅ Stored {stored_chunks} "
-            f"chunks in Qdrant."
+            "\n==================================="
         )
 
+        print(
+            "✅ PDF PROCESSING COMPLETE"
+        )
 
-        # ==================================
-        # SUCCESS RESPONSE
-        # ==================================
+        print(
+            f"📄 Pages: {pages}"
+        )
+
+        print(
+            f"✂️ Chunks: {total_stored}"
+        )
+
+        print(
+            "==================================="
+        )
+
 
         return {
 
@@ -387,24 +563,38 @@ async def upload_document(
                 "PDF processed successfully.",
 
             "file":
-                file.filename,
+                filename,
 
             "pages":
                 pages,
 
             "chunks":
-                stored_chunks
+                total_stored
         }
 
 
     except Exception as e:
 
         print(
-            "\n❌ PDF processing error:"
+            "\n==================================="
         )
 
         print(
+            "❌ PDF PROCESSING ERROR"
+        )
+
+        print(
+            "Type:",
+            type(e).__name__
+        )
+
+        print(
+            "Message:",
             str(e)
+        )
+
+        print(
+            "==================================="
         )
 
 
@@ -415,9 +605,11 @@ async def upload_document(
             "message":
                 str(e),
 
-            "pages": 0,
+            "pages":
+                0,
 
-            "chunks": 0
+            "chunks":
+                0
         }
 
 
@@ -428,13 +620,19 @@ async def upload_document(
 @app.get("/pdf/{filename}")
 def get_pdf(filename: str):
 
-    file_path = os.path.join(
-        UPLOAD_FOLDER,
+    safe_filename = os.path.basename(
         filename
     )
 
+    file_path = os.path.join(
+        UPLOAD_FOLDER,
+        safe_filename
+    )
 
-    if not os.path.exists(file_path):
+
+    if not os.path.exists(
+        file_path
+    ):
 
         return {
             "status": "error",
@@ -591,7 +789,9 @@ async def chat(
         False
     )
 
-    use_pdf = bool(use_pdf)
+    use_pdf = bool(
+        use_pdf
+    )
 
 
     # ======================================
@@ -624,14 +824,21 @@ async def chat(
             }
 
 
-        image_data = image_data.strip()
+        image_data = (
+            image_data.strip()
+        )
 
 
         if not image_data:
+
             image_data = None
 
 
-        if image_data and len(image_data) > 10_000_000:
+        if (
+            image_data
+            and
+            len(image_data) > 10_000_000
+        ):
 
             return {
 
@@ -667,10 +874,14 @@ async def chat(
         str
     ):
 
-        question = str(question)
+        question = str(
+            question
+        )
 
 
-    question = question.strip()
+    question = (
+        question.strip()
+    )
 
 
     if not question:
@@ -764,7 +975,7 @@ async def chat(
 
 
         # ==================================
-        # LOAD RAG ONLY WHEN CHAT IS USED
+        # LOAD RAG
         # ==================================
 
         print(
@@ -823,6 +1034,7 @@ async def chat(
         )
 
         print(
+            type(e).__name__,
             str(e)
         )
 
