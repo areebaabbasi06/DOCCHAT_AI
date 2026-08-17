@@ -36,7 +36,7 @@ from web_search import WebSearch
 
 # ==========================================
 # RAG PIPELINE
-# =========================================
+# ==========================================
 
 class RAGPipeline:
 
@@ -71,7 +71,9 @@ class RAGPipeline:
         self.web_search = WebSearch()
 
         print("Tavily Web Search Initialized")
+
         print("RAG Pipeline Ready")
+
 
     # ==========================================
     # MAIN ASK FUNCTION
@@ -84,67 +86,16 @@ class RAGPipeline:
         image_data: Optional[str] = None
     ):
 
-        """
-        Supported modes:
-
-        1. PDF mode
-           - Search Qdrant first.
-           - Give priority to PDF content.
-           - Use web search only when useful PDF
-             context is not found.
-
-        2. Internet mode
-           - No PDF.
-           - Search the internet with Tavily.
-
-        3. Image mode
-           - Send image to Gemini.
-           - Use Tavily when external information
-             is useful.
-
-        4. PDF + Image mode
-           - Retrieve PDF context first.
-           - Send image to Gemini.
-           - Use web search when PDF context is
-             insufficient.
-
-        The answer should always use the same
-        language as the user's question.
-        """
-
-        # ==========================================
-        # VALIDATE QUESTION
-        # ==========================================
-
         if not question or not question.strip():
-
             return "Please enter a question."
 
         question = question.strip()
 
-
-        print(
-            "\n==================================="
-        )
-
-        print(
-            "Question:",
-            question
-        )
-
-        print(
-            "PDF Mode:",
-            use_pdf
-        )
-
-        print(
-            "Image Provided:",
-            bool(image_data)
-        )
-
-        print(
-            "==================================="
-        )
+        print("\n===================================")
+        print("Question:", question)
+        print("PDF Mode:", use_pdf)
+        print("Image Provided:", bool(image_data))
+        print("===================================")
 
 
         # ==========================================
@@ -156,7 +107,7 @@ class RAGPipeline:
 IMPORTANT LANGUAGE RULE:
 
 Answer the user in the same language and writing
-style used by the user in the question.
+style used by the user.
 
 If the user asks in English, answer in English.
 
@@ -165,11 +116,7 @@ If the user asks in Roman Urdu, answer in Roman Urdu.
 If the user asks in Urdu script, answer in Urdu script.
 
 Do not translate the user's question into another
-language unless the user explicitly asks for a translation.
-
-The retrieved PDF content and web content are only
-information sources. They do not determine the language
-of the final answer.
+language unless explicitly requested.
 
 Keep the answer clear, natural, and easy to understand.
 """
@@ -185,32 +132,24 @@ Keep the answer clear, natural, and easy to understand.
 
             try:
 
-                print(
-                    "\nCreating query embedding..."
-                )
+                print("\nCreating query embedding...")
 
-                query_embedding = (
-                    self.embedder.embed_query(
-                        question
-                    )
+                query_embedding = self.embedder.embed_query(
+                    question
                 )
-
 
                 print(
                     "Searching Qdrant for PDF content..."
                 )
-
 
                 results = self.retriever.search(
                     query_embedding=query_embedding,
                     top_k=5
                 )
 
-
                 if results:
 
                     pdf_parts = []
-
 
                     for item in results:
 
@@ -219,42 +158,30 @@ Keep the answer clear, natural, and easy to understand.
                             ""
                         )
 
-
-                        if (
-                            text
-                            and text.strip()
-                        ):
+                        if text and text.strip():
 
                             pdf_parts.append(
                                 text.strip()
                             )
 
-
-                    pdf_context = (
-                        "\n\n".join(
-                            pdf_parts
-                        )
+                    pdf_context = "\n\n".join(
+                        pdf_parts
                     )
 
-
-                    # ----------------------------------
                     # Limit PDF context
-                    # ----------------------------------
-
                     if len(pdf_context) > 15000:
 
                         pdf_context = (
                             pdf_context[:15000]
-                            +
-                            "\n[PDF context truncated]"
+                            + "\n[PDF context truncated]"
                         )
-
 
                 if pdf_context:
 
                     print(
-                        "PDF context found:"
-                        f" {len(pdf_context)} characters"
+                        "PDF context found:",
+                        len(pdf_context),
+                        "characters"
                     )
 
                 else:
@@ -263,29 +190,17 @@ Keep the answer clear, natural, and easy to understand.
                         "No relevant PDF context found."
                     )
 
-
             except Exception as e:
 
-                print(
-                    "\nPDF retrieval error:"
-                )
-
-                print(
-                    str(e)
-                )
+                print("\nPDF retrieval error:")
+                print(str(e))
 
                 pdf_context = ""
 
-
         else:
 
-            print(
-                "\nPDF not required."
-            )
-
-            print(
-                "Skipping Qdrant PDF retrieval."
-            )
+            print("\nPDF not required.")
+            print("Skipping Qdrant PDF retrieval.")
 
 
         # ==========================================
@@ -294,19 +209,12 @@ Keep the answer clear, natural, and easy to understand.
 
         if image_data:
 
-            print(
-                "\nImage provided."
-            )
-
-            print(
-                "Gemini will analyze the image."
-            )
+            print("\nImage provided.")
+            print("Gemini will analyze the image.")
 
         else:
 
-            print(
-                "\nNo image provided."
-            )
+            print("\nNo image provided.")
 
 
         # ==========================================
@@ -324,31 +232,23 @@ Keep the answer clear, natural, and easy to understand.
 
         if not use_pdf:
 
-            # No PDF means web search is the
-            # primary external information source.
-
+            # Normal chatting / internet mode
             should_search_web = True
-
 
         elif use_pdf and not pdf_context:
 
-            # PDF exists but no relevant content
-            # was retrieved, so use Tavily as fallback.
-
+            # PDF selected but no relevant result
             should_search_web = True
-
 
         elif image_data:
 
-            # Image questions may need external
-            # information in addition to image analysis.
-
+            # Image may require external information
             should_search_web = True
 
 
-        # ------------------------------------------
-        # RUN TAVILY ONLY WHEN NEEDED
-        # ------------------------------------------
+        # ==========================================
+        # RUN TAVILY
+        # ==========================================
 
         if should_search_web:
 
@@ -358,19 +258,14 @@ Keep the answer clear, natural, and easy to understand.
                     "\nSearching the web with Tavily..."
                 )
 
-
-                web_results = (
-                    self.web_search.search(
-                        question,
-                        max_results=3
-                    )
+                web_results = self.web_search.search(
+                    question,
+                    max_results=3
                 )
-
 
                 if web_results:
 
                     web_parts = []
-
 
                     for item in web_results:
 
@@ -389,7 +284,6 @@ Keep the answer clear, natural, and easy to understand.
                             ""
                         )
 
-
                         if len(content) > 3000:
 
                             content = (
@@ -397,41 +291,27 @@ Keep the answer clear, natural, and easy to understand.
                                 + "..."
                             )
 
-
                         web_parts.append(
-
                             f"Title: {title}\n"
                             f"URL: {url}\n"
                             f"Content: {content}"
-
                         )
 
-
-                    web_context = (
-                        "\n\n".join(
-                            web_parts
-                        )
+                    web_context = "\n\n".join(
+                        web_parts
                     )
-
-
-                    # ----------------------------------
-                    # Limit web context
-                    # ----------------------------------
 
                     if len(web_context) > 9000:
 
                         web_context = (
                             web_context[:9000]
-                            +
-                            "\n[Web context truncated]"
+                            + "\n[Web context truncated]"
                         )
 
-
                     print(
-                        "Web results found:"
-                        f" {len(web_results)}"
+                        "Web results found:",
+                        len(web_results)
                     )
-
 
                 else:
 
@@ -439,16 +319,10 @@ Keep the answer clear, natural, and easy to understand.
                         "No web results found."
                     )
 
-
             except Exception as e:
 
-                print(
-                    "\nWeb search error:"
-                )
-
-                print(
-                    str(e)
-                )
+                print("\nWeb search error:")
+                print(str(e))
 
                 web_context = ""
 
@@ -456,10 +330,6 @@ Keep the answer clear, natural, and easy to understand.
 
             print(
                 "\nTavily web search skipped."
-            )
-
-            print(
-                "PDF context is being prioritized."
             )
 
 
@@ -471,17 +341,15 @@ Keep the answer clear, natural, and easy to understand.
 
 
         # ------------------------------------------
-        # LANGUAGE INSTRUCTION
+        # LANGUAGE
         # ------------------------------------------
 
         combined_context += (
             "==============================\n"
             "ANSWER LANGUAGE INSTRUCTION\n"
             "==============================\n"
-            +
-            language_instruction
-            +
-            "\n\n"
+            + language_instruction
+            + "\n\n"
         )
 
 
@@ -492,16 +360,11 @@ Keep the answer clear, natural, and easy to understand.
         if pdf_context:
 
             combined_context += (
-
                 "==============================\n"
                 "PDF DOCUMENT CONTEXT\n"
                 "==============================\n\n"
-
-                +
-                pdf_context
-                +
-                "\n\n"
-
+                + pdf_context
+                + "\n\n"
             )
 
 
@@ -512,16 +375,11 @@ Keep the answer clear, natural, and easy to understand.
         if web_context:
 
             combined_context += (
-
                 "==============================\n"
                 "WEB SEARCH CONTEXT\n"
                 "==============================\n\n"
-
-                +
-                web_context
-                +
-                "\n\n"
-
+                + web_context
+                + "\n\n"
             )
 
 
@@ -532,15 +390,12 @@ Keep the answer clear, natural, and easy to understand.
         if image_data:
 
             combined_context += (
-
                 "==============================\n"
                 "USER IMAGE\n"
                 "==============================\n\n"
-
                 "An image has been provided by the user. "
-                "The image itself will be sent directly "
-                "to Gemini for visual analysis.\n\n"
-
+                "The image will be sent directly to Gemini "
+                "for visual analysis.\n\n"
             )
 
 
@@ -554,21 +409,16 @@ Keep the answer clear, natural, and easy to understand.
 
 SOURCE PRIORITY:
 
-The PDF document is the primary source for this
-question.
+The PDF document is the primary source.
 
 Use the retrieved PDF content first.
 
-Do not replace a PDF-based answer with unrelated
-web information.
+If the PDF contains enough information,
+answer from the PDF.
 
-If the PDF contains enough information to answer
-the question, answer from the PDF.
-
-Use web information only as additional context
-when it is genuinely necessary.
+Use web information only when genuinely
+necessary as additional context.
 """
-
 
         elif web_context:
 
@@ -578,10 +428,9 @@ SOURCE PRIORITY:
 
 No relevant PDF information was available.
 
-Use the web search context as the primary external
-source for the answer.
+Use the web search context as the primary
+external information source.
 """
-
 
         elif image_data:
 
@@ -591,9 +440,8 @@ SOURCE PRIORITY:
 
 Use the user's image as the primary visual source.
 
-Use general knowledge only when appropriate.
+Use general knowledge when appropriate.
 """
-
 
         else:
 
@@ -603,10 +451,10 @@ SOURCE PRIORITY:
 
 No PDF or web context is available.
 
-You may use your general knowledge when appropriate.
+Use general knowledge when appropriate.
 
-Do not claim that information came from a PDF or
-web source when it did not.
+Do not claim that information came from a
+PDF or web source when it did not.
 """
 
 
@@ -618,28 +466,18 @@ web source when it did not.
             "\nGenerating answer with Gemini..."
         )
 
-
         try:
 
-            result = (
-                self.gemini.generate_answer(
-                    question,
-                    combined_context,
-                    image_data=image_data
-                )
+            result = self.gemini.generate_answer(
+                question,
+                combined_context,
+                image_data=image_data
             )
-
 
         except Exception as e:
 
-            print(
-                "\nGemini error:"
-            )
-
-            print(
-                str(e)
-            )
-
+            print("\nGemini error:")
+            print(str(e))
 
             return (
                 "Sorry, I couldn't generate "
@@ -652,16 +490,12 @@ web source when it did not.
         # HANDLE GEMINI RESPONSE
         # ==========================================
 
-        if isinstance(
-            result,
-            dict
-        ):
+        if isinstance(result, dict):
 
             return result.get(
                 "answer",
                 "No answer received."
             )
-
 
         return str(result)
 
@@ -674,27 +508,17 @@ if __name__ == "__main__":
 
     rag = RAGPipeline()
 
-
-    # --------------------------------------
-    # Test without PDF
-    # --------------------------------------
-
     question = (
         "What is Retrieval Augmented Generation?"
     )
-
 
     answer = rag.ask(
         question,
         use_pdf=False
     )
 
-
     print(
         "\n----- FINAL ANSWER -----\n"
     )
 
-
-    print(
-        answer
-    )
+    print(answer)
