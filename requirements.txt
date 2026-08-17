@@ -12,3 +12,4 @@ requests
 pdfplumber
 langchain-text-splitters
 fastembed
+docling
