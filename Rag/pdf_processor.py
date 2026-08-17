@@ -2,13 +2,12 @@
 PDF Processor for DocChat AI
 
 - Uses Docling for PDF parsing
-- Optimized for Railway / low-memory environments
-- Uses native PDF text extraction
-- OCR disabled for normal text PDFs
-- Table structure detection disabled
-- Extracts structured text page by page
-- Creates chunks while preserving page number and filename
-- Output format remains compatible with Qdrant/RAG pipeline
+- Lightweight configuration for text-based PDFs
+- OCR disabled to reduce memory usage
+- Heavy table/image processing disabled
+- Extracts text page by page
+- Creates chunks with filename + page metadata
+- Output remains compatible with Qdrant/RAG pipeline
 """
 
 from typing import List, Dict, BinaryIO, Union
@@ -38,26 +37,27 @@ class PDFProcessor:
         self.chunk_overlap = chunk_overlap
 
         # =====================================================
-        # LIGHTWEIGHT DOCLING CONFIGURATION
+        # LIGHTWEIGHT DOCLING PDF CONFIGURATION
         # =====================================================
 
         pipeline_options = PdfPipelineOptions()
 
-        # Normal text PDFs do not need OCR
+        # Normal text PDFs already contain text.
+        # OCR is disabled to avoid loading OCR models.
         pipeline_options.do_ocr = False
 
-        # Disable heavy table structure processing
+        # Disable heavy table structure processing.
         pipeline_options.do_table_structure = False
 
-        # Use text already embedded inside the PDF
+        # Use the PDF's embedded/native text.
         pipeline_options.force_backend_text = True
 
-        # Do not generate unnecessary images
+        # Do not generate page/table/picture images.
         pipeline_options.generate_page_images = False
         pipeline_options.generate_picture_images = False
         pipeline_options.generate_table_images = False
 
-        # Disable additional enrichment models
+        # Disable optional enrichment/classification features.
         pipeline_options.do_code_enrichment = False
         pipeline_options.do_formula_enrichment = False
         pipeline_options.do_picture_classification = False
@@ -121,12 +121,18 @@ class PDFProcessor:
             return io.BytesIO(pdf_file)
 
         if hasattr(pdf_file, "read"):
+
             try:
                 pdf_file.seek(0)
             except Exception:
                 pass
 
             pdf_bytes = pdf_file.read()
+
+            if not pdf_bytes:
+                raise ValueError(
+                    "The uploaded PDF file is empty."
+                )
 
             return io.BytesIO(pdf_bytes)
 
@@ -164,6 +170,11 @@ class PDFProcessor:
             result = self.converter.convert(source)
 
         except Exception as e:
+
+            print(
+                f"❌ Docling PDF processing error: {e}"
+            )
+
             raise ValueError(
                 f"Docling could not process the PDF: {str(e)}"
             )
@@ -182,15 +193,21 @@ class PDFProcessor:
 
             for page_number, page in pages.items():
 
+                text = ""
+
                 try:
                     text = page.export_to_markdown()
-                except Exception:
-                    text = ""
+                except Exception as e:
+                    print(
+                        f"⚠️ Could not extract page "
+                        f"{page_number}: {e}"
+                    )
 
                 if text:
                     text = text.strip()
 
                 if text:
+
                     pages_data.append(
                         {
                             "page": int(page_number),
@@ -198,12 +215,19 @@ class PDFProcessor:
                         }
                     )
 
-        except Exception:
+        except Exception as e:
 
             print(
-                "⚠️ Page-wise extraction unavailable. "
-                "Using document-level extraction."
+                "⚠️ Page-wise extraction unavailable."
             )
+
+            print(
+                f"Reason: {e}"
+            )
+
+            # =================================================
+            # DOCUMENT-LEVEL FALLBACK
+            # =================================================
 
             try:
                 full_text = document.export_to_markdown()
@@ -227,7 +251,8 @@ class PDFProcessor:
 
             raise ValueError(
                 "No text could be extracted from the PDF. "
-                "The PDF may contain scanned/image-only pages."
+                "The PDF may be scanned/image-only or "
+                "may not contain extractable text."
             )
 
         print(
@@ -374,29 +399,41 @@ if __name__ == "__main__":
 
     processor = PDFProcessor()
 
-    chunks = processor.process_pdf(
-        pdf_path,
-        filename=os.path.basename(pdf_path)
-    )
+    try:
 
-    print("\n==============================")
-    print("PDF TEST RESULT")
-    print("==============================")
-
-    print(
-        f"Total chunks: {len(chunks)}"
-    )
-
-    for chunk in chunks[:3]:
-
-        print("\n--- CHUNK ---")
-
-        print(
-            "Page:",
-            chunk["metadata"]["page"]
+        chunks = processor.process_pdf(
+            pdf_path,
+            filename=os.path.basename(pdf_path)
         )
 
+        print("\n==============================")
+        print("PDF TEST RESULT")
+        print("==============================")
+
         print(
-            "Content:",
-            chunk["content"][:500]
+            f"Total chunks: {len(chunks)}"
         )
+
+        for chunk in chunks[:3]:
+
+            print("\n--- CHUNK ---")
+
+            print(
+                "Page:",
+                chunk["metadata"]["page"]
+            )
+
+            print(
+                "Content:",
+                chunk["content"][:500]
+            )
+
+    except Exception as e:
+
+        print("\n==============================")
+        print("❌ PDF TEST FAILED")
+        print("==============================")
+
+        print(e)
+
+        sys.exit(1)
