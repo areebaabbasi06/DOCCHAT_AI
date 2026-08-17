@@ -2,6 +2,10 @@
 PDF Processor for DocChat AI
 
 - Uses Docling for PDF parsing
+- Optimized for Railway / low-memory environments
+- Uses native PDF text extraction
+- OCR disabled for normal text PDFs
+- Table structure detection disabled
 - Extracts structured text page by page
 - Creates chunks while preserving page number and filename
 - Output format remains compatible with Qdrant/RAG pipeline
@@ -11,7 +15,13 @@ from typing import List, Dict, BinaryIO, Union
 import io
 import os
 
-from docling.document_converter import DocumentConverter
+from docling.document_converter import (
+    DocumentConverter,
+    PdfFormatOption,
+)
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
@@ -22,15 +32,54 @@ class PDFProcessor:
         chunk_size: int = 900,
         chunk_overlap: int = 150
     ):
-        print("📖 Initializing Docling PDF processor...")
+        print("📖 Initializing lightweight Docling PDF processor...")
 
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
-        # Docling converter
-        self.converter = DocumentConverter()
+        # =====================================================
+        # LIGHTWEIGHT DOCLING CONFIGURATION
+        # =====================================================
 
-        # Existing chunking strategy
+        pipeline_options = PdfPipelineOptions()
+
+        # Normal text PDFs do not need OCR
+        pipeline_options.do_ocr = False
+
+        # Disable heavy table structure processing
+        pipeline_options.do_table_structure = False
+
+        # Use text already embedded inside the PDF
+        pipeline_options.force_backend_text = True
+
+        # Do not generate unnecessary images
+        pipeline_options.generate_page_images = False
+        pipeline_options.generate_picture_images = False
+        pipeline_options.generate_table_images = False
+
+        # Disable additional enrichment models
+        pipeline_options.do_code_enrichment = False
+        pipeline_options.do_formula_enrichment = False
+        pipeline_options.do_picture_classification = False
+        pipeline_options.do_picture_description = False
+        pipeline_options.do_chart_extraction = False
+
+        # =====================================================
+        # DOCLING CONVERTER
+        # =====================================================
+
+        self.converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(
+                    pipeline_options=pipeline_options
+                )
+            }
+        )
+
+        # =====================================================
+        # CHUNKING
+        # =====================================================
+
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
@@ -46,11 +95,11 @@ class PDFProcessor:
             ]
         )
 
-        print("✅ Docling PDF processor ready.")
+        print("✅ Lightweight Docling PDF processor ready.")
 
-    # ==========================================
-    # CONVERT PDF
-    # ==========================================
+    # =========================================================
+    # PREPARE PDF SOURCE
+    # =========================================================
 
     def _prepare_source(
         self,
@@ -72,21 +121,12 @@ class PDFProcessor:
             return io.BytesIO(pdf_file)
 
         if hasattr(pdf_file, "read"):
-            current_position = None
-
             try:
-                current_position = pdf_file.tell()
+                pdf_file.seek(0)
             except Exception:
                 pass
 
-            pdf_file.seek(0)
             pdf_bytes = pdf_file.read()
-
-            if current_position is not None:
-                try:
-                    pdf_file.seek(current_position)
-                except Exception:
-                    pass
 
             return io.BytesIO(pdf_bytes)
 
@@ -94,16 +134,16 @@ class PDFProcessor:
             "Unsupported PDF input type."
         )
 
-    # ==========================================
+    # =========================================================
     # EXTRACT TEXT WITH PAGES
-    # ==========================================
+    # =========================================================
 
     def extract_text_with_pages(
         self,
         pdf_file: Union[BinaryIO, bytes, str]
     ) -> List[Dict]:
         """
-        Extract text from PDF using Docling.
+        Extract text from PDF using lightweight Docling.
 
         Returns:
 
@@ -118,14 +158,12 @@ class PDFProcessor:
 
         source = self._prepare_source(pdf_file)
 
-        print("📄 Processing PDF with Docling...")
+        print("📄 Processing PDF with lightweight Docling...")
 
         try:
-
             result = self.converter.convert(source)
 
         except Exception as e:
-
             raise ValueError(
                 f"Docling could not process the PDF: {str(e)}"
             )
@@ -134,9 +172,9 @@ class PDFProcessor:
 
         pages_data = []
 
-        # ======================================
+        # =====================================================
         # PAGE-WISE EXTRACTION
-        # ======================================
+        # =====================================================
 
         try:
 
@@ -153,7 +191,6 @@ class PDFProcessor:
                     text = text.strip()
 
                 if text:
-
                     pages_data.append(
                         {
                             "page": int(page_number),
@@ -163,15 +200,15 @@ class PDFProcessor:
 
         except Exception:
 
-            # ==================================
-            # FALLBACK
-            # ==================================
-
             print(
-                "⚠️ Page-wise extraction unavailable."
+                "⚠️ Page-wise extraction unavailable. "
+                "Using document-level extraction."
             )
 
-            full_text = document.export_to_markdown()
+            try:
+                full_text = document.export_to_markdown()
+            except Exception:
+                full_text = ""
 
             if full_text and full_text.strip():
 
@@ -182,9 +219,9 @@ class PDFProcessor:
                     }
                 )
 
-        # ======================================
+        # =====================================================
         # VERIFY EXTRACTION
-        # ======================================
+        # =====================================================
 
         if not pages_data:
 
@@ -200,9 +237,9 @@ class PDFProcessor:
 
         return pages_data
 
-    # ==========================================
+    # =========================================================
     # CREATE CHUNKS
-    # ==========================================
+    # =========================================================
 
     def create_chunks(
         self,
@@ -232,14 +269,8 @@ class PDFProcessor:
             if not page_text:
                 continue
 
-            # ==================================
-            # CHUNK CURRENT PAGE
-            # ==================================
-
-            page_chunks = (
-                self.text_splitter.split_text(
-                    page_text
-                )
+            page_chunks = self.text_splitter.split_text(
+                page_text
             )
 
             for chunk_text in page_chunks:
@@ -267,9 +298,9 @@ class PDFProcessor:
 
         return chunks
 
-    # ==========================================
+    # =========================================================
     # COMPLETE PDF PIPELINE
-    # ==========================================
+    # =========================================================
 
     def process_pdf(
         self,
@@ -290,17 +321,13 @@ class PDFProcessor:
             f"\n📄 Processing: {filename}"
         )
 
-        pages_data = (
-            self.extract_text_with_pages(
-                pdf_file
-            )
+        pages_data = self.extract_text_with_pages(
+            pdf_file
         )
 
-        chunks = (
-            self.create_chunks(
-                pages_data,
-                filename
-            )
+        chunks = self.create_chunks(
+            pages_data,
+            filename
         )
 
         if not chunks:
@@ -319,9 +346,9 @@ class PDFProcessor:
         return chunks
 
 
-# ==========================================
+# =============================================================
 # LOCAL TEST
-# ==========================================
+# =============================================================
 
 if __name__ == "__main__":
 
