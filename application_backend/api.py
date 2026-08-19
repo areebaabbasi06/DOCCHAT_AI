@@ -1,10 +1,12 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 import os
 import sys
 import threading
+import time
 
 
 # ==========================================
@@ -203,12 +205,10 @@ async def upload_document(
             "chunks": 0
         }
 
-
     file_path = os.path.join(
         UPLOAD_FOLDER,
         filename
     )
-
 
     try:
 
@@ -271,7 +271,8 @@ async def upload_document(
             "🔍 Validating PDF..."
         )
 
-        valid, message = validate_file(
+        valid, message = await run_in_threadpool(
+            validate_file,
             file_path
         )
 
@@ -295,7 +296,6 @@ async def upload_document(
                 "chunks": 0
             }
 
-
         print(
             "✅ PDF validation successful."
         )
@@ -310,7 +310,9 @@ async def upload_document(
         )
 
         pdf_processor_service, qdrant_service = (
-            get_services()
+            await run_in_threadpool(
+                get_services
+            )
         )
 
 
@@ -322,13 +324,11 @@ async def upload_document(
             "📖 Extracting PDF text..."
         )
 
-        chunks = (
-            pdf_processor_service.process_pdf(
-                file_path,
-                filename=filename
-            )
+        chunks = await run_in_threadpool(
+            pdf_processor_service.process_pdf,
+            file_path,
+            filename=filename
         )
-
 
         print(
             "✅ PDF text extraction completed."
@@ -373,11 +373,9 @@ async def upload_document(
             )
         )
 
-
         total_chunks = len(
             chunks
         )
-
 
         print(
             f"📄 Pages processed: {pages}"
@@ -396,7 +394,9 @@ async def upload_document(
             "🧠 Loading embedding model..."
         )
 
-        rag_service = get_rag()
+        rag_service = await run_in_threadpool(
+            get_rag
+        )
 
         print(
             "✅ Embedding model ready."
@@ -407,16 +407,33 @@ async def upload_document(
         # EMBEDDING + QDRANT BATCHING
         # ==================================
 
-        BATCH_SIZE = 8
+        # Smaller batch size helps reduce
+        # Qdrant timeout problems.
+        BATCH_SIZE = 4
+
+        # Number of times to retry a failed
+        # Qdrant upload.
+        MAX_RETRIES = 3
+
+        # Seconds between retries.
+        RETRY_DELAY = 2
 
         total_stored = 0
-
 
         print(
             f"🧠 Processing embeddings "
             f"in batches of {BATCH_SIZE}..."
         )
 
+        print(
+            f"🔁 Qdrant max retries per batch: "
+            f"{MAX_RETRIES}"
+        )
+
+
+        # ==================================
+        # PROCESS ALL CHUNKS
+        # ==================================
 
         for start in range(
             0,
@@ -429,11 +446,9 @@ async def upload_document(
                 total_chunks
             )
 
-
             batch_chunks = chunks[
                 start:end
             ]
-
 
             print(
                 f"\n🧠 Embedding chunks "
@@ -442,12 +457,11 @@ async def upload_document(
             )
 
 
-            batch_embeddings = []
-
-
             # ==================================
-            # CREATE BATCH EMBEDDINGS
+            # COLLECT TEXT
             # ==================================
+
+            batch_texts = []
 
             for chunk in batch_chunks:
 
@@ -456,7 +470,6 @@ async def upload_document(
                     ""
                 )
 
-
                 if not content.strip():
 
                     raise ValueError(
@@ -464,20 +477,24 @@ async def upload_document(
                         "empty text."
                     )
 
-
-                embedding = (
-                    rag_service
-                    .embedder
-                    .embed_query(
-                        content
-                    )
+                batch_texts.append(
+                    content
                 )
 
 
-                batch_embeddings.append(
-                    embedding
-                )
+            # ==================================
+            # CREATE BATCH EMBEDDINGS
+            # ==================================
 
+            print(
+                f"🧠 Generating "
+                f"{len(batch_texts)} embeddings..."
+            )
+
+            batch_embeddings = await run_in_threadpool(
+                rag_service.embedder.generate_embeddings,
+                batch_texts
+            )
 
             print(
                 f"✅ Created "
@@ -494,16 +511,85 @@ async def upload_document(
                 "📦 Sending batch to Qdrant..."
             )
 
+            stored = None
+            last_error = None
 
-            stored = (
-                qdrant_service.upsert_chunks(
-                    batch_chunks,
-                    batch_embeddings
-                )
-            )
 
+            # ==================================
+            # QDRANT RETRY LOOP
+            # ==================================
+
+            for attempt in range(
+                1,
+                MAX_RETRIES + 1
+            ):
+
+                try:
+
+                    print(
+                        f"🔄 Qdrant upload attempt "
+                        f"{attempt}/{MAX_RETRIES}"
+                    )
+
+                    stored = await run_in_threadpool(
+                        qdrant_service.upsert_chunks,
+                        batch_chunks,
+                        batch_embeddings
+                    )
+
+                    print(
+                        "✅ Qdrant upload successful."
+                    )
+
+                    break
+
+
+                except Exception as qdrant_error:
+
+                    last_error = qdrant_error
+
+                    print(
+                        f"⚠️ Qdrant upload failed "
+                        f"on attempt {attempt}: "
+                        f"{type(qdrant_error).__name__}: "
+                        f"{str(qdrant_error)}"
+                    )
+
+
+                    # ==================================
+                    # RETRY
+                    # ==================================
+
+                    if attempt < MAX_RETRIES:
+
+                        print(
+                            f"⏳ Waiting "
+                            f"{RETRY_DELAY} seconds "
+                            f"before retry..."
+                        )
+
+                        await run_in_threadpool(
+                            time.sleep,
+                            RETRY_DELAY
+                        )
+
+                    else:
+
+                        print(
+                            "❌ Qdrant upload failed "
+                            "after all retries."
+                        )
+
+
+            # ==================================
+            # CHECK QDRANT RESULT
+            # ==================================
 
             if stored is None:
+
+                if last_error is not None:
+
+                    raise last_error
 
                 stored = len(
                     batch_chunks
@@ -513,7 +599,6 @@ async def upload_document(
             total_stored += int(
                 stored
             )
-
 
             print(
                 f"✅ Batch stored. "
@@ -526,6 +611,7 @@ async def upload_document(
             # RELEASE BATCH MEMORY
             # ==================================
 
+            del batch_texts
             del batch_embeddings
             del batch_chunks
 
@@ -629,7 +715,6 @@ def get_pdf(filename: str):
         safe_filename
     )
 
-
     if not os.path.exists(
         file_path
     ):
@@ -638,7 +723,6 @@ def get_pdf(filename: str):
             "status": "error",
             "message": "PDF not found."
         }
-
 
     return FileResponse(
         file_path,
@@ -656,7 +740,6 @@ def create_session():
     session_id = (
         session_manager.create_session()
     )
-
 
     return {
 
@@ -677,7 +760,6 @@ def get_history():
     sessions = (
         session_manager.get_all_sessions()
     )
-
 
     return {
 
@@ -702,7 +784,6 @@ def get_old_chat(
             session_id
         )
     )
-
 
     return {
 
@@ -731,7 +812,6 @@ def delete_chat(
         )
     )
 
-
     if not deleted:
 
         return {
@@ -741,7 +821,6 @@ def delete_chat(
             "message":
                 "Session not found."
         }
-
 
     return {
 
@@ -823,16 +902,13 @@ async def chat(
                     "Invalid image data."
             }
 
-
         image_data = (
             image_data.strip()
         )
 
-
         if not image_data:
 
             image_data = None
-
 
         if (
             image_data
@@ -848,7 +924,6 @@ async def chat(
                     "Image is too large. "
                     "Please choose a smaller image."
             }
-
 
         if image_data:
 
@@ -878,11 +953,9 @@ async def chat(
             question
         )
 
-
     question = (
         question.strip()
     )
-
 
     if not question:
 
@@ -982,15 +1055,21 @@ async def chat(
             "\n🤖 Loading RAG pipeline..."
         )
 
-        rag_service = get_rag()
-
+        rag_service = await run_in_threadpool(
+            get_rag
+        )
 
         print(
             "🤖 Sending request to RAG pipeline..."
         )
 
 
-        answer = rag_service.ask(
+        # ==================================
+        # ASK RAG
+        # ==================================
+
+        answer = await run_in_threadpool(
+            rag_service.ask,
             question,
             use_pdf=use_pdf,
             image_data=image_data
@@ -1037,7 +1116,6 @@ async def chat(
             type(e).__name__,
             str(e)
         )
-
 
         return {
 
