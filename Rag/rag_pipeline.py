@@ -76,6 +76,58 @@ class RAGPipeline:
 
 
     # ==========================================
+    # SMART WEB SEARCH DETECTION
+    # ==========================================
+
+    def needs_web_search(self, question: str) -> bool:
+        """
+        Decide whether the question likely needs
+        fresh/current web information.
+
+        Normal/general questions skip Tavily
+        for faster responses.
+        """
+
+        text = question.lower().strip()
+
+        web_keywords = [
+            "latest",
+            "today",
+            "current",
+            "recent",
+            "news",
+            "right now",
+            "at the moment",
+            "this week",
+            "this month",
+            "price",
+            "weather",
+            "score",
+            "scores",
+            "ranking",
+            "rankings",
+            "stock",
+            "stocks",
+            "market",
+            "update",
+            "updates",
+            "election",
+            "president",
+            "prime minister",
+            "ceo",
+            "release",
+            "released",
+            "new version",
+            "2026"
+        ]
+
+        return any(
+            keyword in text
+            for keyword in web_keywords
+        )
+
+
+    # ==========================================
     # MAIN ASK FUNCTION
     # ==========================================
 
@@ -85,6 +137,10 @@ class RAGPipeline:
         use_pdf: bool = False,
         image_data: Optional[str] = None
     ):
+
+        # ======================================
+        # VALIDATE QUESTION
+        # ======================================
 
         if not question or not question.strip():
             return "Please enter a question."
@@ -132,19 +188,25 @@ Keep the answer clear, natural, and easy to understand.
 
             try:
 
-                print("\nCreating query embedding...")
+                print(
+                    "\nCreating query embedding..."
+                )
 
-                query_embedding = self.embedder.embed_query(
-                    question
+                query_embedding = (
+                    self.embedder.embed_query(
+                        question
+                    )
                 )
 
                 print(
                     "Searching Qdrant for PDF content..."
                 )
 
+                # Reduced from 5 to 3
+                # to reduce retrieval/context time.
                 results = self.retriever.search(
                     query_embedding=query_embedding,
-                    top_k=5
+                    top_k=3
                 )
 
                 if results:
@@ -168,11 +230,12 @@ Keep the answer clear, natural, and easy to understand.
                         pdf_parts
                     )
 
-                    # Limit PDF context
-                    if len(pdf_context) > 15000:
+                    # Keep PDF context smaller
+                    # for faster Gemini processing.
+                    if len(pdf_context) > 9000:
 
                         pdf_context = (
-                            pdf_context[:15000]
+                            pdf_context[:9000]
                             + "\n[PDF context truncated]"
                         )
 
@@ -192,15 +255,25 @@ Keep the answer clear, natural, and easy to understand.
 
             except Exception as e:
 
-                print("\nPDF retrieval error:")
-                print(str(e))
+                print(
+                    "\nPDF retrieval error:"
+                )
+
+                print(
+                    str(e)
+                )
 
                 pdf_context = ""
 
         else:
 
-            print("\nPDF not required.")
-            print("Skipping Qdrant PDF retrieval.")
+            print(
+                "\nPDF not required."
+            )
+
+            print(
+                "Skipping Qdrant PDF retrieval."
+            )
 
 
         # ==========================================
@@ -209,12 +282,19 @@ Keep the answer clear, natural, and easy to understand.
 
         if image_data:
 
-            print("\nImage provided.")
-            print("Gemini will analyze the image.")
+            print(
+                "\nImage provided."
+            )
+
+            print(
+                "Gemini will analyze the image."
+            )
 
         else:
 
-            print("\nNo image provided.")
+            print(
+                "\nNo image provided."
+            )
 
 
         # ==========================================
@@ -226,28 +306,42 @@ Keep the answer clear, natural, and easy to understand.
         should_search_web = False
 
 
-        # ------------------------------------------
+        # ==========================================
         # WEB SEARCH DECISION
-        # ------------------------------------------
+        # ==========================================
 
-        if not use_pdf:
+        if image_data:
 
-            # Normal chatting / internet mode
-            should_search_web = True
+            # Do not automatically search the web
+            # just because an image was provided.
+            should_search_web = False
+
+        elif use_pdf and pdf_context:
+
+            # Relevant PDF information exists.
+            # Use the PDF first.
+            should_search_web = False
 
         elif use_pdf and not pdf_context:
 
-            # PDF selected but no relevant result
+            # PDF selected but no relevant content
+            # was found. Use web as fallback.
             should_search_web = True
 
-        elif image_data:
+        else:
 
-            # Image may require external information
-            should_search_web = True
+            # Normal chat:
+            # Search web only when question appears
+            # to require fresh/current information.
+            should_search_web = (
+                self.needs_web_search(
+                    question
+                )
+            )
 
 
         # ==========================================
-        # RUN TAVILY
+        # RUN TAVILY ONLY WHEN NEEDED
         # ==========================================
 
         if should_search_web:
@@ -255,12 +349,14 @@ Keep the answer clear, natural, and easy to understand.
             try:
 
                 print(
-                    "\nSearching the web with Tavily..."
+                    "\n🌐 Searching the web with Tavily..."
                 )
 
-                web_results = self.web_search.search(
-                    question,
-                    max_results=3
+                web_results = (
+                    self.web_search.search(
+                        question,
+                        max_results=2
+                    )
                 )
 
                 if web_results:
@@ -284,10 +380,11 @@ Keep the answer clear, natural, and easy to understand.
                             ""
                         )
 
-                        if len(content) > 3000:
+                        # Keep individual result small
+                        if len(content) > 1800:
 
                             content = (
-                                content[:3000]
+                                content[:1800]
                                 + "..."
                             )
 
@@ -301,10 +398,11 @@ Keep the answer clear, natural, and easy to understand.
                         web_parts
                     )
 
-                    if len(web_context) > 9000:
+                    # Keep total web context small
+                    if len(web_context) > 5000:
 
                         web_context = (
-                            web_context[:9000]
+                            web_context[:5000]
                             + "\n[Web context truncated]"
                         )
 
@@ -321,15 +419,24 @@ Keep the answer clear, natural, and easy to understand.
 
             except Exception as e:
 
-                print("\nWeb search error:")
-                print(str(e))
+                print(
+                    "\nWeb search error:"
+                )
+
+                print(
+                    str(e)
+                )
 
                 web_context = ""
 
         else:
 
             print(
-                "\nTavily web search skipped."
+                "\n⚡ Tavily skipped."
+            )
+
+            print(
+                "Using direct/local knowledge."
             )
 
 
@@ -416,8 +523,9 @@ Use the retrieved PDF content first.
 If the PDF contains enough information,
 answer from the PDF.
 
-Use web information only when genuinely
-necessary as additional context.
+Do not use outside information when the
+PDF already provides the answer.
+
 """
 
         elif web_context:
@@ -426,10 +534,11 @@ necessary as additional context.
 
 SOURCE PRIORITY:
 
-No relevant PDF information was available.
+Fresh web information was retrieved.
 
 Use the web search context as the primary
 external information source.
+
 """
 
         elif image_data:
@@ -441,6 +550,7 @@ SOURCE PRIORITY:
 Use the user's image as the primary visual source.
 
 Use general knowledge when appropriate.
+
 """
 
         else:
@@ -455,6 +565,7 @@ Use general knowledge when appropriate.
 
 Do not claim that information came from a
 PDF or web source when it did not.
+
 """
 
 
@@ -468,16 +579,23 @@ PDF or web source when it did not.
 
         try:
 
-            result = self.gemini.generate_answer(
-                question,
-                combined_context,
-                image_data=image_data
+            result = (
+                self.gemini.generate_answer(
+                    question,
+                    combined_context,
+                    image_data=image_data
+                )
             )
 
         except Exception as e:
 
-            print("\nGemini error:")
-            print(str(e))
+            print(
+                "\nGemini error:"
+            )
+
+            print(
+                str(e)
+            )
 
             return (
                 "Sorry, I couldn't generate "
